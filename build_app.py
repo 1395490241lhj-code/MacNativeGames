@@ -512,6 +512,21 @@ def step_data(tree, game, keys, logs, *, firmware=None, shared_fonts=None):
         run([py, 'scripts/make_output_res_overlay.py', '2560x1440'], logs / 'output_res_overlay.log', cwd=tree)
 
 
+def output_4k_overlay(tree, version, native_4k, logs):
+    """--native-4k: the HeapDef overlay for a 3840x2160 canvas, which the runtime then takes as its largest output size (key 3
+    gains native 4K, runtime/game_patches_v143.c). Without the option an overlay left by an earlier build is removed, so
+    the default stays the 2560x1440 swapchain and heaps."""
+    folder = tree / f'extracted/{version}/romfs-patches-out/3840x2160'
+    if not native_4k:
+        if folder.exists():
+            shutil.rmtree(folder)
+        return
+    if not (folder / 'manifest.tsv').exists():
+        say(f'2/4 data: RomFS overlay for the 3840x2160 output (--native-4k, key 3 in the game)')
+        run([tree/'.venv/bin/python', 'scripts/make_output_res_overlay.py', '3840x2160', '--version', version],
+            logs / f'{version}-output_res_overlay-3840x2160.log', cwd=tree)
+
+
 def build_hactool(tree, logs):
     source = tree.parent / 'src/hactool'
     git_fetch(*HACTOOL, source, logs/'fetch-hactool.log')
@@ -612,7 +627,7 @@ static FILE *mng_open_base(const char *path) {
     return source/'hactool'
 
 
-def step_update_data(tree, game, update, keys, logs, *, version='v112'):
+def step_update_data(tree, game, update, keys, logs, *, version='v112', native_4k=False):
     expected = VERSIONS[version]
     folder = tree/f'extracted/{version}/romfs'
     index = folder/'index.json'
@@ -641,6 +656,7 @@ def step_update_data(tree, game, update, keys, logs, *, version='v112'):
     for i, (script, arguments) in enumerate(steps):
         run([tree/'.venv/bin/python', 'scripts/'+script, *arguments, '--version', version],
             logs/(version+'-'+script+(f'-{i}' if i > 1 else '')+'.log'), cwd=tree)
+    output_4k_overlay(tree, version, native_4k, logs)
 
 
 def build_spirv_cross(tree, logs):
@@ -1237,6 +1253,7 @@ def parse_args(argv):
     ap.add_argument('--work', type=Path, help='work folder (default: TOTK_build next to the game file)')
     ap.add_argument('--shader-cache', type=Path, help=argparse.SUPPRESS)   # removed: the seed comes from the game data and the shared list
     ap.add_argument('--no-shader-reminder', action='store_true', help='iOS: do not install the Mac agent that asks, while an iPhone / iPad with the game is connected, to send the shaders the shared list lacks')
+    ap.add_argument('--native-4k', action='store_true', help='Mac, 1.4.3: key 3 also offers native 4K (a 3840x2160 canvas and UI); the game then reserves its swapchain and texture heaps for 4K (about 333 MB more)')
     fonts = ap.add_mutually_exclusive_group()
     fonts.add_argument('--firmware', type=Path, help='unpacked firmware NCA directory providing the six expected shared fonts (needed for NSP unless --shared-fonts or valid cached fonts are available)')
     fonts.add_argument('--shared-fonts', type=Path, help='previously extracted shared-font directory containing the six verified .bfttf files')
@@ -1344,12 +1361,14 @@ def main(argv):
             raise BuildError('needs about 25 GB free for the work folder (the app itself is an APFS clone of it when on the same volume)')
     if update:
         version, update = identify_update(tree, update, keys, logs)
+    if args.native_4k and (args.platform == 'ios' or version != 'v143'):
+        raise BuildError('--native-4k needs the 1.4.3 update and a Mac build (the other versions and iPhone / iPad have no 4K output)')
     step_code(tree, game, keys, env, logs)
     if update:
         step_code(tree, update, keys, env, logs, version=version)
     step_data(tree, game, keys, logs, firmware=firmware, shared_fonts=shared_fonts)
     if update:
-        step_update_data(tree, game, update, keys, logs, version=version)
+        step_update_data(tree, game, update, keys, logs, version=version, native_4k=args.native_4k)
     step_shaders(tree, logs, version=version)
     step_shader_libs(tree, logs, version=version)
     step_binary(tree, game, keys, env, logs, version=version)
