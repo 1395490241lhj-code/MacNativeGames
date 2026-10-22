@@ -94,7 +94,7 @@ class BotwImport(unittest.TestCase):
         config = tree / 'build/botw160/aoc_config.h'
         config.parent.mkdir(parents=True)
         config.write_text('#define AOC_PRESENT_MASK 3')
-        with patch.object(build_app, 'BOTW160', expected), patch.object(build_app, 'fonts_valid', return_value=True), \
+        with patch.dict(build_app.VERSIONS, {'botw160': expected}), patch.object(build_app, 'fonts_valid', return_value=True), \
                 patch.object(build_app, 'build_hactool') as build:
             build_app.step_data_botw(tree, BOTW.parent, self.base, self.keys, self.root / 'logs', update=self.update)
         build.assert_not_called()
@@ -112,7 +112,7 @@ class BotwImport(unittest.TestCase):
     def test_fonts_from_firmware(self):
         tree, expected = self.cached_romfs()
         firmware = self.root / 'firmware'
-        with patch.object(build_app, 'BOTW160', expected), patch.object(build_app, 'fonts_valid', return_value=False), \
+        with patch.dict(build_app.VERSIONS, {'botw160': expected}), patch.object(build_app, 'fonts_valid', return_value=False), \
                 patch.object(build_app, 'run') as run, patch.object(build_app, 'validate_fonts') as validate:
             build_app.step_data_botw(tree, BOTW.parent, self.base, self.keys, self.root / 'logs', firmware=firmware,
                                      update=self.update)
@@ -124,7 +124,7 @@ class BotwImport(unittest.TestCase):
 
     def test_no_font_source_names_both_options(self):
         tree, expected = self.cached_romfs()
-        with patch.object(build_app, 'BOTW160', expected), patch.object(build_app, 'fonts_valid', return_value=False), \
+        with patch.dict(build_app.VERSIONS, {'botw160': expected}), patch.object(build_app, 'fonts_valid', return_value=False), \
                 self.assertRaisesRegex(build_app.BuildError, '--firmware .* or --shared-fonts'):
             build_app.step_data_botw(tree, BOTW.parent, self.base, self.keys, self.root / 'logs', update=self.update)
 
@@ -143,7 +143,7 @@ class BotwImport(unittest.TestCase):
             version='botw160', chain='totk-native-v6-unverified', shaders=2000,
             files={'pso_manifest.tsv': hashlib.sha256(b'test').hexdigest()})))
         out = self.root / 'BotW.app'
-        with patch.object(build_app, 'sign_app'):
+        with patch.object(build_app, 'sign_app'), patch.object(build_app, 'app_seal_valid', return_value=True):
             build_app.step_app(tree, out, self.root / 'logs', version='botw160', game='botw')
         self.assertTrue((out / 'Contents/MacOS/BotW').is_file())
         self.assertFalse((out / 'Contents/Resources/totk/extracted/botw160/aoc').exists())
