@@ -399,7 +399,7 @@ static uint64_t g_pool_query_checked;
    is unchanged. Only a pool no other pool overlaps is kept, so a hit is the pool the locked search returns; it is already
    resident (pool_res ran), and only its removal takes it out of the residency set, which bumps the generation.
    TOTK_POOL_TLS=0 or flag pool_tls 0 turns it off; TOTK_POOL_TLS_CHECK=1 or flag pool_tls_check 1 compares every hit with
-   the locked search. */
+   the locked search. 32 entries halved the misses (10% -> 5%) but the longer scan cost as much, no net gain (2026-10-23). */
 #define POOL_TLS_N 8
 typedef struct { uintptr_t lo, hi, base; void *buf; uint64_t gpu, gen; } pool_tls_ent;
 static _Thread_local pool_tls_ent g_ptls[POOL_TLS_N];
@@ -1324,7 +1324,7 @@ static id<MTL4ComputeCommandEncoder> blit_buffer(id<MTLBuffer> src, NSUInteger s
     (void)src; (void)so; (void)dst; (void)d; (void)n; return blit_kind(1); }
 
 /* TOTK: collect and copy the uniform ranges a submission binds (see usnap_t). */
-static size_t arena_alloc(size_t n, id<MTLBuffer> *buf);
+static size_t arena_alloc(size_t n, __strong id<MTLBuffer> *buf);
 static void pend_materialize(uint64_t a, uint8_t *out, size_t n, int depth);
 static void pend_overlay(uint64_t a, uint8_t *out, size_t n, int depth);
 static void pend_materialize_x(uint64_t a, uint8_t *out, size_t n, int depth, int wait);
@@ -1575,7 +1575,7 @@ void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n) {
 
 // TOTK: uniform updates carry their data inline in the (host-owned) recording; stage it in this submit's
 // argument arena (shared Metal memory) and copy on the GPU timeline like any other buffer copy.
-static size_t arena_alloc(size_t n, id<MTLBuffer> *buf);
+static size_t arena_alloc(size_t n, __strong id<MTLBuffer> *buf);
 /* TOTK: inline uniform updates without splitting the render pass (renaming).
    The game updates small uniform ranges between draws about 200 times per frame (nvnCommandBufferUpdateUniformBuffer).
    Each one used to be a GPU copy, which ended the render pass: a copy encoder in between and the pass reopened with every
@@ -5946,7 +5946,9 @@ static NvArena *arena_new(void) {
 static uint64_t g_arena_epoch; // A cached GPU address is valid only for its submission.
 void arena_begin(void) { g_arena_epoch++; if (!g_arenas) { g_arenas = [NSMutableArray array]; g_sub_arenas = [NSMutableArray array]; } g_cur_arena = nil; }
 void arena_commit(uint64_t fence) { for (NvArena *a in g_sub_arenas) { a->fence = fence; [g_arenas addObject:a]; } [g_sub_arenas removeAllObjects]; g_cur_arena = nil; }
-static size_t arena_alloc(size_t n, id<MTLBuffer> *buf) {
+/* TOTK: the buffer out-parameters here and in driver_bank_gpu / widen_u8_gpu are __strong: an unqualified id * is
+   __autoreleasing under ARC, which put the arena buffer in the autorelease pool at every call (a few per draw). */
+static size_t arena_alloc(size_t n, __strong id<MTLBuffer> *buf) {
     n = (n + 255) & ~(size_t)255;
     if (!g_cur_arena || g_cur_arena->used + n > (size_t)(4 << 20)) {   // every arena is 4 MiB (arena_new); was a buf.length message per allocation
         pthread_mutex_lock(&g_mu); g_cur_arena = arena_new(); pthread_mutex_unlock(&g_mu);
@@ -8053,7 +8055,7 @@ static void driver_bank_fill(uint8_t *d, int bank, int stage) {
         for (int r = 0; r < 32; r++) { uint32_t th = (uint32_t)S.tex[stage][r]; memcpy(d + 0x20 + 8 * r, &th, 4); }   /* TOTK: combined handle table (BindTexture) */
     }
 }
-static uint64_t driver_bank_gpu(int bank, int stage, id<MTLBuffer> *out) {
+static uint64_t driver_bank_gpu(int bank, int stage, __strong id<MTLBuffer> *out) {
     // S002 live A/B/A/B found no reliable gain. Keep the original allocation path as
     // the default, without computing or copying a cache key when the experiment is off.
     if (!driver_cache_on()) {
@@ -10236,7 +10238,7 @@ static struct { const p_draw_idx *di; __unsafe_unretained id<MTLBuffer> buf; siz
 static int g_draw_depth;
 static int wide_find(const p_draw_idx *di) { if (g_wide_sub != g_sub_serial) { g_nwide = 0; g_wide_sub = g_sub_serial; } for (int i = 0; i < g_nwide; i++) if (g_wide[i].di == di) return i; return -1; }
 /* Widens count 8-bit indices at GPU address src (range checked by the caller) into this submit's arena. */
-static void widen_u8_gpu(uint64_t src, uint32_t count, id<MTLBuffer> *out, size_t *off) {
+static void widen_u8_gpu(uint64_t src, uint32_t count, __strong id<MTLBuffer> *out, size_t *off) {
     static id<MTLComputePipelineState> ps; static id<MTL4ArgumentTable> at;
     if (!ps) {
         NSError *e = nil;
@@ -10945,8 +10947,9 @@ static int mfxup_dock(__unsafe_unretained NvShader *fs) {
    Returns 1 when the draw was replaced (not to be encoded). */
 static _Atomic uint32_t g_scene_w, g_scene_h;   // the internal resolution: the scene the compose draw samples (fps_overlay)
 static _Atomic uint32_t g_out_w, g_out_h;       // the output resolution: the canvas rectangle the game presents (present_encode)
+static _Atomic uint64_t g_outup_wh, g_outup_last;   // the MetalFX output stage's size (w | h << 32) and the game frame it last ran (output_upscale)
 static void scene_size_note(__unsafe_unretained NvShader *fs) {   // the compose shader's slot 0 is this frame's 3D scene
-    if (strncmp(fs->key, "0ac9a54938974396", 16)) return;
+    if (!TAA_COMPOSE(fs)) return;   // TOTK 0ac9a549, Breath of the Wild 1.6.0 d14b1c38 / 1.9.0 f7ee6fe1 (nvn_obj.h; BotW had no bracket)
     int tid = (int)(S.tex[1][0] & 0xfffff); if (tid <= 0) return;
     id<MTLTexture> src = (__bridge id<MTLTexture>)tex_fast(tid); if (!src) return;
     uint32_t w = (uint32_t)src.width, h = (uint32_t)src.height;
@@ -12814,6 +12817,8 @@ static int fps_overlay_prepare(int slot, MTLViewport vp, MTLViewport *ovp, float
     uint64_t mfx_at = atomic_load(&g_mfxup_last), gen_at = atomic_load(&g_mfxi_last), cur = atomic_load(&g_cur_frame);   // the last game frame MetalFX did the upscale (" MFX") / an interpolated frame was shown ("+50")
     int gen = gen_at && cur - gen_at < 30 ? fps_overlay_gen_value() : 0;
     int ow = (int)atomic_load(&g_out_w), oh = (int)atomic_load(&g_out_h);   // the output resolution; before the first present the picture's size
+    uint64_t up_at = atomic_load(&g_outup_last), up = atomic_load(&g_outup_wh);
+    if (up_at && cur - up_at < 30 && up) { ow = (int)(uint32_t)up; oh = (int)(up >> 32); }   // MetalFX 2K: what it upscaled the canvas to (the user read 1080p)
     fps_overlay_info info = {fps_overlay_value(), ow ? ow : (int)lround(vp.width), oh ? oh : (int)lround(vp.height), mfx_at && cur - mfx_at < 30, gen > 0 ? gen : 0, atomic_load(&g_pic_big),
                              (int)atomic_load(&g_scene_w), (int)atomic_load(&g_scene_h)};
     if (hud_compact()) { char text[96]; fps_overlay_text(&info, text, sizeof text); hud_publish(HUD_FPS, text, 0); return 0; }   // shown in the window's corner panel
@@ -12934,6 +12939,7 @@ static id<MTLTexture> output_upscale(id<MTL4CommandBuffer> cb, id<MTLTexture> sr
     if (timed) g_outup_timed[slot] = 1;
     g_outup_size[0] = cw; g_outup_size[1] = ch; g_outup_size[2] = ow; g_outup_size[3] = oh;
     mfxup_queue_residency(); g_outup_n++; atomic_store(&g_mfxup_last, atomic_load(&g_cur_frame));
+    atomic_store(&g_outup_wh, ow | ((uint64_t)oh << 32)); atomic_store(&g_outup_last, atomic_load(&g_cur_frame));
     return out;
 }
 static int dcmp_out(const void *x, const void *y) { double a = *(const double *)x, b = *(const double *)y; return a < b ? -1 : a > b; }
