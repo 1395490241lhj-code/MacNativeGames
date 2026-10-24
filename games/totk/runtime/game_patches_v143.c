@@ -459,6 +459,10 @@ static void render_res_publish(unsigned canvas_w){
     if(!render_page)return;
     float k=canvas_w>1920?canvas_w/1920.0f:1.0f,v[2]={render_w/k,render_h/k};
     if(render_canvas){v[0]=1920;v[1]=1080;render_w=(unsigned)(1920*k);render_h=(unsigned)(1080*k);}   /* the game's scaling makes it the canvas */
+    /* Native 4K (--native-4k): a 3840x2160 scene's texture pool (about 1.49 GiB) is over the 1 GiB zero-copy buffer limit
+       (nvn_mtl.m POOL_BUFFER_MAX), so the 4K canvas keeps the game's own docked scene, 1600x900 scaled with the canvas:
+       3200x1800. Smaller canvases still render the scene at the canvas size. */
+    if(render_canvas&&canvas_w>2560){v[0]=1600;v[1]=900;render_w=(unsigned)(1600*k);render_h=(unsigned)(900*k);}
     memcpy(render_page+16,v,sizeof v);
     fprintf(stderr,"[totk] 1.4.3 render resolution: %ux%u on a %u-wide canvas (game size %.0fx%.0f, scaled by %.4f)\n",render_w,render_h,canvas_w,v[0],v[1],k);
 }
@@ -478,6 +482,7 @@ static int render_res(unsigned *w,unsigned *h){
         *w=960;*h=540;
 #else
         render_canvas=1;unsigned ow,oh;if(runtime_output_res(&ow,&oh)){*w=ow;*h=oh;}else{*w=1920;*h=1080;}   /* the largest scene, for the heaps */
+        if(*w>2560){*w=2560;*h=1440;}   /* native 4K: the 2K canvas has the largest canvas-sized scene (render_res_publish) */
 #endif
         return 1;
     }
