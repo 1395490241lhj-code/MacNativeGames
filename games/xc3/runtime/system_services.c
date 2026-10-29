@@ -115,8 +115,8 @@ static int32_t ldn_state(void) { return 0; }
 static uint32_t ldn_unavailable(void) { return LDN_UNAVAILABLE; }
 static uint32_t nsd_unavailable(void) { return NSD_UNAVAILABLE; }
 /* nn::ec::ShowShopAddOnContentList: 2.2.1's DLC menu ("Purchase") opens the eShop library applet and blocks until the
-   player closes it. There is no eShop here and the host runs no library applets (the SDK read a null applet proxy, owner
-   2026-10-29), so the shop opens and closes at once: the game returns to its menu, and aoc still reports no add-on. */
+   player closes it. There is no eShop here and the host runs no library applets (the SDK read a null applet proxy; seen in
+   play, 2026-10-29), so the shop opens and closes at once: the game returns to its menu, and aoc still reports no add-on. */
 static void shop_closed(uint64_t application_id, const void *user) { (void)user; fprintf(stderr, "[totk] eShop add-on list for %016llx: no shop on this Mac, closed at once\n", (unsigned long long)application_id); }
 void *runtime_game_override(const char *name) {
     static const struct { const char *name; void *fn; } entries[] = {
