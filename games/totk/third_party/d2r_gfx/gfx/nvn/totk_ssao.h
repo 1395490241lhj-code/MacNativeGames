@@ -13,13 +13,16 @@
    result, bit for bit. TOTK_SSAO_STRENGTH / TOTK_SSAO_RADIUS (percent) / TOTK_SSAO_PAIRS
    set the start values, "flag ssao_strength_pct | ssao_radius_pct | ssao_pairs <n>" change them in play (the draw reads
    c1 from that memory, so no pipeline is rebuilt: an A/B on one frozen view). */
+/* The settings panel's choice (Mac, runtime/settings_panel.h, ssao.txt): strength and radius in percent, 0 = off. It is
+   given before the guest starts (dm_gfx_ssao_start) and decides whether the shaders are patched when TOTK_SSAO is unset. */
+static _Atomic int g_ssao_saved;
 static int ssao_on(void) {
 #if TARGET_OS_IPHONE
     return 0;   // iOS loads prebuilt libraries: no source to rebuild
 #else
     static int on; static dispatch_once_t once;   // shader_load runs on the warm-up threads at once
-    dispatch_once(&once, ^{ const char *e = getenv("TOTK_SSAO"); on = e && !strcmp(e, "1");
-        if (on) MLOG("[ssao] TOTK_SSAO=1: the AO shaders are rebuilt with tunable parameters (flag ssao_strength_pct / ssao_radius_pct / ssao_pairs)"); });
+    dispatch_once(&once, ^{ const char *e = getenv("TOTK_SSAO"); on = e ? !strcmp(e, "1") : atomic_load(&g_ssao_saved) > 0;
+        if (on) MLOG("[ssao] %s: the AO shaders are rebuilt with tunable parameters (flag ssao_strength_pct / ssao_radius_pct / ssao_pairs)", e ? "TOTK_SSAO=1" : "the settings panel (ssao.txt)"); });
     return on;
 #endif
 }
@@ -28,7 +31,7 @@ static const char *const k_ssao_env[3] = {"TOTK_SSAO_STRENGTH", "TOTK_SSAO_RADIU
 static const int k_ssao_max[3] = {800, 400, 8};
 static int ssao_param(int i) {   // the environment value goes in only while the slot is unset (a flag is never overwritten)
     int v = atomic_load(&g_ssao_v[i]);
-    if (v < 0) { const char *e = getenv(k_ssao_env[i]); v = e ? atoi(e) : 0; v = v < 0 ? 0 : v > k_ssao_max[i] ? k_ssao_max[i] : v;
+    if (v < 0) { const char *e = getenv(k_ssao_env[i]); v = e ? atoi(e) : i < 2 && !getenv("TOTK_SSAO") ? atomic_load(&g_ssao_saved) : 0; v = v < 0 ? 0 : v > k_ssao_max[i] ? k_ssao_max[i] : v;
                  int was = -1; if (!atomic_compare_exchange_strong(&g_ssao_v[i], &was, v)) v = was; }
     return v;
 }
@@ -67,6 +70,17 @@ static int ssao_flag(const char *name, int v) {
     if (!ssao_on()) { MLOG("【红】[flag] %s = %d kept, but the game started without TOTK_SSAO=1: no shader carries the parameters", name, v); return 1; }
     float p[4]; ssao_values(p); int n = ssao_write_all();
     MLOG("[flag] %s = %d: AO strength %.2f, radius %.2f, extra pairs %.0f in %d shader(s) (0 = stock; the shaders cap strength at 8, radius to 0.25 .. 4, BotW extra sets at 3)", name, v, p[0], p[1], p[2], n); return 1;
+}
+
+/* The settings panel's row (Mac): dm_gfx_ssao_start before the guest starts, with the saved strength / radius percent
+   (0 = off); dm_gfx_ssao_locked when TOTK_SSAO decides; dm_gfx_ssao_live whether this run's shaders carry the
+   parameters (then dm_gfx_ssao_set changes them in play, 0 back to the stock AO bit for bit; else only the next launch). */
+void dm_gfx_ssao_start(int pct) { atomic_store(&g_ssao_saved, pct > 0 ? pct : 0); }
+int dm_gfx_ssao_locked(void) { return getenv("TOTK_SSAO") != NULL; }
+int dm_gfx_ssao_live(void) { return ssao_on(); }
+void dm_gfx_ssao_set(int pct) {
+    if (!ssao_on()) return;
+    ssao_flag("ssao_strength_pct", pct); ssao_flag("ssao_radius_pct", pct);
 }
 
 /* TOTK_SSAO source rewrite. The helper goes in front of the fragment entry and the one line that stores the AO value
