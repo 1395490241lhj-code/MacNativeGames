@@ -61,7 +61,18 @@ static void titles_with_note(void) {
     NSDictionary *d = doc();
     assert([d[@"source"] isEqual:@"fallback"] && [d[@"verdict"] isEqual:@""] && [d[@"status"] isEqual:@"behind"]);
     assert([d[@"points"] isEqual:(@[@"newest", @"sixth", @"fifth", @"fourth", @"third"])]);
-    assert([d[@"note"] isEqual:(zh ? @"这次没有拿到 AI 总结，只列出提交标题" : @"No AI summary this time; listing the commit titles only")]);
+    assert([d[@"note"] isEqual:(zh ? @"这次没有拿到 AI 总结，只列出提交标题" : @"No AI summary this time; listing the commit titles only")] && [d[@"login"] isEqual:@NO]);
+}
+/* Every one that is there failed, as a logged-out one does: the page offers the login. */
+static void titles_logged_out(void) {
+    NSDictionary *d = doc();
+    assert([d[@"source"] isEqual:@"fallback"] && [d[@"points"] count] == 5 && [d[@"login"] isEqual:@YES]);
+    assert([d[@"note"] isEqual:(zh ? @"AI 还没登录，或这次没有回答" : @"The AI is not logged in, or did not answer this time")]);
+}
+static void titles_no_command(void) {
+    NSDictionary *d = doc();
+    assert([d[@"source"] isEqual:@"fallback"] && [d[@"points"] count] == 5 && [d[@"login"] isEqual:@NO]);
+    assert([d[@"note"] isEqual:(zh ? @"没有找到 AI 命令行（claude、codex 或 qodercli），装好并登录一个后这里会显示总结" : @"No AI command line found (claude, codex or qodercli). Install one and log in, and the summary shows here")]);
 }
 
 static void statuses(void) {
@@ -69,7 +80,7 @@ static void statuses(void) {
     fresh(); fake(@"claude", GOOD); run_behind();
     NSDictionary *d = doc();
     assert([d[@"version"] isEqual:@1] && [d[@"game"] isEqual:@"totk"] && [d[@"generated_at"] isEqual:@1000.0]);
-    assert([d[@"status"] isEqual:@"behind"] && [d[@"source"] isEqual:@"fallback"] && [d[@"verdict"] isEqual:@""] && [d[@"note"] isEqual:@""]);
+    assert([d[@"status"] isEqual:@"behind"] && [d[@"source"] isEqual:@"fallback"] && [d[@"verdict"] isEqual:@""] && [d[@"note"] isEqual:@""] && [d[@"login"] isEqual:@NO]);
     assert([d[@"installed"] isEqual:@"aaaaaaaaaaaa"] && [d[@"head"] isEqual:@"bbbbbbbbbbbb"] && [d[@"total"] isEqual:@8] && [d[@"installed_date"] isEqual:@"2026-10-29"]);
     assert([d[@"points"] isEqual:(@[@"newest", @"sixth", @"fifth", @"fourth", @"third"])]);
     assert(([d[@"key"] isEqual:[NSString stringWithFormat:@"%@|%@|off", BASE, HEAD]]));
@@ -78,7 +89,7 @@ static void statuses(void) {
     /* Latest: skip with a reason, no AI even when it is on. */
     fresh(); ai(YES); fake(@"claude", GOOD); run_with((NSString *)BASE, compare(@"identical", 0, @[]), 200, 5);
     d = doc();
-    assert([d[@"status"] isEqual:@"latest"] && [d[@"verdict"] isEqual:@"skip"] && [d[@"reason"] length] && [d[@"copy"] isEqual:@""] && [d[@"head"] isEqual:@"aaaaaaaaaaaa"]);
+    assert([d[@"status"] isEqual:@"latest"] && [d[@"verdict"] isEqual:@"skip"] && [d[@"reason"] length] && [d[@"copy"] isEqual:@""] && [d[@"head"] isEqual:@"aaaaaaaaaaaa"] && [d[@"login"] isEqual:@NO]);
     assert(!ran(@"claude"));
     /* Installed newer than main: nothing to update to. */
     fresh(); run_with((NSString *)BASE, compare(@"behind", 0, @[]), 200, 5); assert([doc()[@"status"] isEqual:@"latest"]);
@@ -111,6 +122,12 @@ static void failures(void) {
     fresh(); run_behind(); NSData *before = [NSData dataWithContentsOfFile:in_folder(@"summary.json")];
     run_with((NSString *)BASE, nil, 0, 5); assert([before isEqual:[NSData dataWithContentsOfFile:in_folder(@"summary.json")]]);
     run_with((NSString *)BASE, nil, 500, 5); assert([before isEqual:[NSData dataWithContentsOfFile:in_folder(@"summary.json")]]);
+    /* With the AI on, a kept document whose run can never answer says so: the page would go on saying the AI is at work. */
+    ai(YES); run_with((NSString *)BASE, nil, 0, 5); d = doc();
+    assert([d[@"note"] isEqual:(zh ? @"连不上 GitHub" : @"Could not reach GitHub")] && [d[@"points"] count] == 5 && [d[@"status"] isEqual:@"behind"] && [d[@"login"] isEqual:@NO]);
+    NSData *noted = [NSData dataWithContentsOfFile:in_folder(@"summary.json")];
+    run_with((NSString *)BASE, nil, 0, 5); assert([noted isEqual:[NSData dataWithContentsOfFile:in_folder(@"summary.json")]]);
+    ai(NO); run_behind(); before = [NSData dataWithContentsOfFile:in_folder(@"summary.json")];
     /* A document about another version does not stay: the app was updated, the page must not call it the old one. */
     mng_summary_run(folder, @"totk", @"cccccccccccccccccccccccccccccccccccccccc", @"/g.app", 1000, ^NSDictionary *(NSString *q, NSInteger *status) { (void)q; *status = 0; return nil; }, @[bin], 5);
     assert([doc()[@"status"] isEqual:@"unknown"] && [doc()[@"installed"] isEqual:@"cccccccccccc"]);
@@ -152,7 +169,7 @@ static void commands(void) {
     NSDictionary *d = doc();
     assert(ran(@"mine") && !ran(@"claude") && [mark(@"mine") isEqual:@"run 'a;b'\n"]);
     assert([d[@"source"] isEqual:@"model"] && [d[@"verdict"] isEqual:@"wait"] && [d[@"reason"] isEqual:@"small {fix}"] && [d[@"points"] isEqual:(@[@"one", @"two"])] && [d[@"note"] isEqual:@""]);
-    assert([d[@"key"] hasSuffix:@"|on"]);
+    assert([d[@"key"] hasSuffix:@"|on"] && [d[@"login"] isEqual:@NO]);
     /* Run in an empty temporary folder. */
     assert(![mark(@"cwd") hasPrefix:folder] && [mark(@"listing") isEqual:@""]);
     /* The player's own command by its full path. */
@@ -184,17 +201,21 @@ static void commands(void) {
     fresh(); ai(YES); fake(@"claude", GOOD); fake(@"codex", GOOD); run_behind(); assert(ran(@"claude") && !ran(@"codex"));
     /* One that fails, a logged-out one, hands on to the next; so does a slow one, at the limit. */
     fresh(); ai(YES); fake(@"claude", @"exit 1"); fake(@"codex", @"exit 2"); fake(@"qodercli", GOOD); run_behind();
-    assert(ran(@"claude") && ran(@"codex") && ran(@"qodercli") && [doc()[@"source"] isEqual:@"model"]);
+    assert(ran(@"claude") && ran(@"codex") && ran(@"qodercli") && [doc()[@"source"] isEqual:@"model"] && [doc()[@"login"] isEqual:@NO]);
+    /* All of them logged out, whichever are installed: the login. */
+    fresh(); ai(YES); fake(@"claude", @"exit 1"); fake(@"codex", @"exit 1"); fake(@"qodercli", @"exit 1"); run_behind();
+    assert(ran(@"claude") && ran(@"codex") && ran(@"qodercli")); titles_logged_out();
+    fresh(); ai(YES); fake(@"qodercli", @"exit 1"); run_behind(); titles_logged_out();
     fresh(); ai(YES); fake(@"claude", @"/bin/sleep 30"); fake(@"codex", GOOD); run_with((NSString *)BASE, compare(@"ahead", 8, some_commits()), 200, 1);
     assert(ran(@"codex") && [doc()[@"source"] isEqual:@"model"]);
     /* One that ran and answered badly spent its account: no other is asked. */
     fresh(); ai(YES); fake(@"claude", @"echo nonsense"); fake(@"codex", GOOD); run_behind(); titles_with_note(); assert(!ran(@"codex"));
     /* Turned off on the page while one ran: the next is not asked. */
-    fresh(); ai(YES); fake(@"claude", [NSString stringWithFormat:@"/bin/rm '%@'\nexit 1", in_folder(@"ai")]); fake(@"codex", GOOD); run_behind(); assert(ran(@"claude") && !ran(@"codex"));
+    fresh(); ai(YES); fake(@"claude", [NSString stringWithFormat:@"/bin/rm '%@'\nexit 1", in_folder(@"ai")]); fake(@"codex", GOOD); run_behind(); assert(ran(@"claude") && !ran(@"codex") && [doc()[@"key"] hasSuffix:@"|off"] && [doc()[@"login"] isEqual:@NO]);
     /* While it runs the page has this version's titles, not an old document. */
     fresh(); ai(YES); fake(@"claude", [NSString stringWithFormat:@"/bin/cp '%@' '%@/during'\n%@", in_folder(@"summary.json"), marks, GOOD]); run_behind();
     NSDictionary *during = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:[marks stringByAppendingPathComponent:@"during"]] options:0 error:nil];
-    assert([during[@"status"] isEqual:@"behind"] && [during[@"source"] isEqual:@"fallback"] && [during[@"note"] isEqual:@""] && [during[@"points"] count] == 5 && [doc()[@"source"] isEqual:@"model"]);
+    assert([during[@"status"] isEqual:@"behind"] && [during[@"source"] isEqual:@"fallback"] && [during[@"note"] isEqual:@""] && [during[@"login"] isEqual:@NO] && [during[@"points"] count] == 5 && [doc()[@"source"] isEqual:@"model"]);
     /* A script whose interpreter sits beside it, in a folder not searched: the found folder is on its PATH. */
     fresh(); ai(YES);
     NSString *beside = [marks stringByAppendingPathComponent:@"beside"];
@@ -211,18 +232,18 @@ static void commands(void) {
     assert([@"mine" writeToFile:in_folder(@"ai-command") atomically:NO encoding:NSUTF8StringEncoding error:nil]);
     run_behind(); titles_with_note(); assert(ran(@"mine") && !ran(@"claude"));
     /* No other AI is tried on its own: it is not tested, and its command line could leave the model a shell. */
-    fresh(); ai(YES); fake(@"gemini", GOOD); run_behind(); titles_with_note(); assert(!ran(@"gemini"));
+    fresh(); ai(YES); fake(@"gemini", GOOD); run_behind(); titles_no_command(); assert(!ran(@"gemini"));
     /* None found. */
-    fresh(); ai(YES); run_behind(); titles_with_note();
+    fresh(); ai(YES); run_behind(); titles_no_command();
     /* Failing, even with a good answer: titles. */
-    fresh(); ai(YES); fake(@"claude", [GOOD stringByAppendingString:@"\nexit 3"]); run_behind(); titles_with_note();
+    fresh(); ai(YES); fake(@"claude", [GOOD stringByAppendingString:@"\nexit 3"]); run_behind(); titles_logged_out();
     /* Slow: killed at the limit, what it started too. */
     fresh(); ai(YES);
     NSString *pidFile = [marks stringByAppendingPathComponent:@"grandchild"];
     fake(@"claude", [NSString stringWithFormat:@"/bin/sleep 60 &\necho $! > '%@'\nwait", pidFile]);
     double start = NSProcessInfo.processInfo.systemUptime;
     run_with((NSString *)BASE, compare(@"ahead", 8, some_commits()), 200, 1);
-    assert(NSProcessInfo.processInfo.systemUptime - start < 5); titles_with_note();
+    assert(NSProcessInfo.processInfo.systemUptime - start < 5); titles_logged_out();
     pid_t grandchild = [mark(@"grandchild") intValue]; assert(grandchild > 0);
     usleep(200000); assert(kill(grandchild, 0) && errno == ESRCH);
     /* A prompt far bigger than a pipe holds does not hang a command that answers before reading it. */
@@ -307,9 +328,75 @@ static void key_and_lock(void) {
     run_with((NSString *)BASE, compare(@"ahead", 8, some_commits()), 200, 5);
     assert(!fetches && !doc()); close(held);
     run_behind(); assert(fetches == 1 && doc());
+    /* The page's button while a run holds the lock: its own run leaves at once, and this one serves the new choice. */
+    fresh(); ai(NO); fake(@"claude", GOOD);
+    __block int passes = 0;
+    MNGSummaryFetch clicked = ^NSDictionary *(NSString *q, NSInteger *status) {
+        (void)q; *status = 200;
+        if (!passes++) {
+            ai(YES);
+            mng_summary_run(folder, @"totk", (NSString *)BASE, @"/A.app", 1000, ^NSDictionary *(NSString *r, NSInteger *s) { (void)r; (void)s; abort(); }, @[bin], 5);
+        }
+        return compare(@"ahead", 8, some_commits());
+    };
+    mng_summary_run(folder, @"totk", (NSString *)BASE, @"/A.app", 1000, clicked, @[bin], 5);
+    assert(passes == 2 && ran(@"claude") && [doc()[@"source"] isEqual:@"model"] && [doc()[@"key"] hasSuffix:@"|on"]);
+    /* Turned off during an AI's answer: it ends as the titles, and no AI is asked again. */
+    fresh(); ai(YES); fake(@"claude", [NSString stringWithFormat:@"/bin/rm '%@'\n%@", in_folder(@"ai"), GOOD]); passes = 0;
+    mng_summary_run(folder, @"totk", (NSString *)BASE, @"/A.app", 1000, ^NSDictionary *(NSString *q, NSInteger *status) { (void)q; *status = 200; passes++; return compare(@"ahead", 8, some_commits()); }, @[bin], 5);
+    assert(passes == 2 && [doc()[@"source"] isEqual:@"fallback"] && [doc()[@"key"] hasSuffix:@"|off"] && [doc()[@"note"] isEqual:@""]);
+    /* Nothing changed: one pass. */
+    fresh(); ai(YES); fake(@"claude", GOOD); run_behind(); assert(fetches == 1);
     /* Written whole: no temporary file is left. */
     NSArray *left = [NSFileManager.defaultManager contentsOfDirectoryAtPath:folder error:nil];
-    for (NSString *name in left) assert(([@[@"summary.json", @"summary.lock"] containsObject:name]));
+    for (NSString *name in left) assert(([@[@"summary.json", @"summary.lock", @"ai"] containsObject:name]));
+}
+
+/* --ai-login: stdin as a terminal's would be, so what the login reads and whose process group it is in can be seen. */
+static int refreshes;
+static int login_then(void (^refresh)(void)) {
+    NSString *typed = [marks stringByAppendingPathComponent:@"typed"];
+    assert([@"code\n" writeToFile:typed atomically:NO encoding:NSUTF8StringEncoding error:nil]);
+    int saved = dup(0), input = open(typed.fileSystemRepresentation, O_RDONLY);
+    assert(saved >= 0 && input >= 0 && dup2(input, 0) == 0); close(input);
+    refreshes = 0;
+    int code = mng_summary_login(@[bin, @"/usr/bin", @"/bin"], refresh);
+    dup2(saved, 0); close(saved);
+    return code;
+}
+static int login(void) { return login_then(^{ refreshes++; }); }
+static void ai_login(void) {
+    /* The first installed, its own login, attached; then the refresh. */
+    fresh(); fake(@"claude", [NSString stringWithFormat:@"/bin/ps -o pgid= -p $$ > '%@/pgid'", marks]); fake(@"codex", @"exit 0"); fake(@"qodercli", @"exit 0");
+    assert(!login() && refreshes == 1 && [mark(@"claude") isEqual:@"auth login\n"] && !ran(@"codex") && !ran(@"qodercli"));
+    assert([mark(@"prompt") isEqual:@"code\n"] && [mark(@"pgid") intValue] == getpgrp());
+    fresh(); fake(@"codex", @"exit 0"); fake(@"qodercli", @"exit 0");
+    assert(!login() && refreshes == 1 && [mark(@"codex") isEqual:@"login\n"] && !ran(@"qodercli"));
+    fresh(); fake(@"qodercli", @"exit 0");
+    assert(!login() && refreshes == 1 && [mark(@"qodercli") isEqual:@"login\n"]);
+    /* The login failed, or was stopped: its code, no refresh, no other CLI's login, and closing the window still ends it. */
+    signal(SIGHUP, SIG_DFL);
+    fresh(); fake(@"claude", @"exit 7"); fake(@"codex", @"exit 0");
+    assert(login() == 7 && !refreshes && !ran(@"codex") && signal(SIGHUP, SIG_DFL) == SIG_DFL);
+    fresh(); fake(@"claude", @"kill -9 $$");
+    assert(login() == 1 && !refreshes);
+    /* Nothing installed, and a file is never a source of commands. */
+    fresh(); fake(@"mine", @"exit 0"); fake(@"gemini", @"exit 0");
+    [NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
+    assert([@"mine" writeToFile:in_folder(@"ai-command") atomically:NO encoding:NSUTF8StringEncoding error:nil]);
+    assert(login() == 1 && !refreshes && !ran(@"mine") && !ran(@"gemini"));
+    fresh(); fake(@"claude", @"exit 0"); fake(@"mine", @"exit 0");
+    [NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
+    assert([@"mine" writeToFile:in_folder(@"ai-command") atomically:NO encoding:NSUTF8StringEncoding error:nil]);
+    assert(!login() && ran(@"claude") && !ran(@"mine"));
+    /* The whole way: logged out, the login, and the answer is in the document with nothing more to do. */
+    fresh(); ai(YES);
+    NSString *in = [marks stringByAppendingPathComponent:@"logged-in"];
+    fake(@"claude", [NSString stringWithFormat:@"if [ \"$1\" = auth ]; then /usr/bin/touch '%@'; exit 0; fi\n[ -f '%@' ] || exit 1\n%@", in, in, GOOD]);
+    run_behind(); titles_logged_out();
+    assert(!login_then(^{ raise(SIGHUP); run_behind(); }));   /* the window closed during the refresh: it goes on */
+    signal(SIGHUP, SIG_DFL);
+    assert([doc()[@"source"] isEqual:@"model"] && [doc()[@"login"] isEqual:@NO] && [doc()[@"note"] isEqual:@""]);
 }
 
 /* The detached start: this program started as the launcher starts itself, its report written by the --update-summary below. */
@@ -318,7 +405,7 @@ static void detached_child(void) {
     struct stat null, s; assert(!stat("/dev/null", &null));
     int stdio = 1; for (int fd = 0; fd < 3; fd++) stdio = stdio && !fstat(fd, &s) && s.st_rdev == null.st_rdev;
     int open_fds = 0; for (int fd = 3; fd < 1024; fd++) if (fcntl(fd, F_GETFD) != -1) open_fds++;
-    NSString *report = [NSString stringWithFormat:@"ppid=%d sid=%d stdio=%d fds=%d nice=%d", getppid(), getsid(0), stdio, open_fds, getpriority(PRIO_PROCESS, 0)];
+    NSString *report = [NSString stringWithFormat:@"ppid=%d sid=%d stdio=%d fds=%d", getppid(), getsid(0), stdio, open_fds];
     [report writeToFile:@(getenv("DETACH_REPORT")) atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 static void detached(const char *self) {
@@ -327,17 +414,19 @@ static void detached(const char *self) {
     int leak = open("/dev/null", O_RDONLY); assert(leak >= 3);   /* a descriptor without close-on-exec */
     setenv("TOTK_UPDATE_SUMMARY", "0", 1); mng_summary_start(self); usleep(500000);
     assert(![NSFileManager.defaultManager fileExistsAtPath:report] && waitpid(-1, NULL, WNOHANG) == -1);
+    assert(!getenv("TOTK_UPDATE_LAUNCHER"));   /* so the page starts nothing and offers no login */
     unsetenv("TOTK_UPDATE_SUMMARY");
     double start = NSProcessInfo.processInfo.systemUptime;
     mng_summary_start(self);
     assert(NSProcessInfo.processInfo.systemUptime - start < 0.2);
+    assert(!strcmp(getenv("TOTK_UPDATE_LAUNCHER"), self));
     assert(waitpid(-1, NULL, WNOHANG) == -1 && errno == ECHILD);   /* no zombie, no child left */
     NSString *text = nil;
     for (int i = 0; i < 100 && !text; i++) { usleep(50000); text = [NSString stringWithContentsOfFile:report encoding:NSUTF8StringEncoding error:nil]; }
     assert(text); [NSFileManager.defaultManager removeItemAtPath:report error:nil]; close(leak);
-    int ppid, sid, stdio, fds, nice_value;
-    assert(sscanf(text.UTF8String, "ppid=%d sid=%d stdio=%d fds=%d nice=%d", &ppid, &sid, &stdio, &fds, &nice_value) == 5);
-    if (ppid != 1 || sid == getsid(0) || !stdio || fds || nice_value != 20) { fprintf(stderr, "detached: %s\n", text.UTF8String); abort(); }
+    int ppid, sid, stdio, fds;
+    assert(sscanf(text.UTF8String, "ppid=%d sid=%d stdio=%d fds=%d", &ppid, &sid, &stdio, &fds) == 4);
+    if (ppid != 1 || sid == getsid(0) || !stdio || fds) { fprintf(stderr, "detached: %s\n", text.UTF8String); abort(); }
 }
 
 int main(int argc, char **argv) { @autoreleasepool {
@@ -346,7 +435,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     setenv("TOTK_UI_LANG", argv[1], 1); zh = !strcmp(argv[1], "zh");
     NSString *top = [NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
     folder = [top stringByAppendingPathComponent:@"update"]; bin = [top stringByAppendingPathComponent:@"bin"]; marks = [top stringByAppendingPathComponent:@"marks"];
-    statuses(); failures(); long_comparison(); commands(); garbage(); hostile(); key_and_lock(); detached(argv[0]);
+    statuses(); failures(); long_comparison(); commands(); garbage(); hostile(); key_and_lock(); ai_login(); detached(argv[0]);
     [NSFileManager.defaultManager removeItemAtPath:top error:nil];
     puts("pass: update summary");
     return 0;

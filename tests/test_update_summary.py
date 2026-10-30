@@ -27,6 +27,12 @@ class UpdateSummary(unittest.TestCase):
                     self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
                     self.assertIn('pass: update summary', run.stdout)
 
+    def test_launcher_modes(self):
+        launcher = (ROOT / 'games/totk/app/launcher.m').read_text(encoding='utf-8')
+        run = launcher.split('static void update_summary_run(void) {')[1]
+        self.assertTrue(run.lstrip().startswith('setpriority(PRIO_PROCESS, 0, 20);'))   # started by the launcher or by the page
+        self.assertIn('return mng_summary_login(mng_summary_dirs(), ^{ update_summary_run(); });', launcher)
+
 
 if __name__ == '__main__':
     unittest.main()

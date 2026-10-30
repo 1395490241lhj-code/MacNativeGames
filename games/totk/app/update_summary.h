@@ -1,10 +1,11 @@
 /* What upstream did since this app was built, for the settings panel's 更新 page (runtime/update_tab.h). The launcher starts
-   itself detached with --update-summary at each launch and goes on to the game. Public GitHub metadata only; it never
-   downloads or installs anything. It writes <data>/update/summary.json, whole or not at all. Off: TOTK_UPDATE_SUMMARY=0.
+   itself detached with --update-summary at each launch and goes on to the game; the page starts it the same way when its
+   AI button changes something. Public GitHub metadata only; it never downloads or installs anything. It writes
+   <data>/update/summary.json, whole or not at all. Off: TOTK_UPDATE_SUMMARY=0.
 
    AI is opt-in (the file update/ai, the page's button), as it spends the player's own account: a command that reads the
    prompt on stdin and prints the answer, the player's own (update/ai-command) or else the first of Claude's, Codex's and
-   Qoder's command lines that runs. Those three run without the tools that reach a shell, files or the web, and without
+   Qoder's command lines that runs (--ai-login: the first one's own login, from the page's button). Those three run without the tools that reach a shell, files or the web, and without
    the player's hooks or settings, as checked on real logins: commit text must not get that far. Codex has no switch for
    its sub-agents and still reads its AGENTS.md. Others are not tested yet, so they are not tried on their own. */
 #pragma once
@@ -28,10 +29,12 @@ static NSString *const MNG_SUMMARY_END = @"<<<COMMITS_END>>>";
 /* The GitHub API with `query` after the repository: the JSON object, and the HTTP status (0: no reply). */
 typedef NSDictionary *(^MNGSummaryFetch)(NSString *query, NSInteger *http);
 
-/* Start this program again with --update-summary, cut off from the caller. Nothing but async-signal-safe calls after fork. */
+/* Start this program again with --update-summary, cut off from the caller, and tell the game where it is, for the page's
+   buttons. Nothing but async-signal-safe calls after fork. */
 static inline void mng_summary_start(const char *executable) {
     const char *off = getenv("TOTK_UPDATE_SUMMARY");
     if (off && !strcmp(off, "0")) return;
+    setenv("TOTK_UPDATE_LAUNCHER", executable, 1);
     char *const arguments[] = {(char *)executable, "--update-summary", NULL};
     struct rlimit files;
     int most = getrlimit(RLIMIT_NOFILE, &files) || files.rlim_cur > 65536 ? 65536 : (int)files.rlim_cur;
@@ -45,7 +48,6 @@ static inline void mng_summary_start(const char *executable) {
         if (null < 0) _exit(1);
         dup2(null, 0); dup2(null, 1); dup2(null, 2);
         for (int fd = 3; fd < most; fd++) close(fd);
-        setpriority(PRIO_PROCESS, 0, 20);
         execv(executable, arguments);
         _exit(1);
     }
@@ -148,10 +150,12 @@ static inline NSString *mng_summary_find(NSString *name, NSArray<NSString *> *di
     }
     return nil;
 }
-/* The commands to ask in turn, each with its executable's whole path: the player's, when there is one, and then no other. */
-static inline NSArray<NSArray<NSString *> *> *mng_summary_commands(NSString *folder, NSArray<NSString *> *dirs) {
+/* The commands to ask in turn, each with its executable's whole path: the player's, when there is one (`players` says so),
+   and then no other. */
+static inline NSArray<NSArray<NSString *> *> *mng_summary_commands(NSString *folder, NSArray<NSString *> *dirs, BOOL *players) {
     NSString *file = [folder stringByAppendingPathComponent:@"ai-command"];
     NSString *own = [NSString stringWithContentsOfFile:file encoding:NSUTF8StringEncoding error:nil];
+    *players = YES;
     if (!own && [NSFileManager.defaultManager fileExistsAtPath:file]) return @[];
     own = [own stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     NSArray<NSArray<NSString *> *> *commands = @[
@@ -159,6 +163,7 @@ static inline NSArray<NSArray<NSString *> *> *mng_summary_commands(NSString *fol
         @[@"codex", @"exec", @"--skip-git-repo-check", @"--sandbox", @"read-only", @"--ephemeral", @"--ignore-user-config", @"--ignore-rules", @"--disable", @"shell_tool", @"--disable", @"unified_exec",
           @"--disable", @"code_mode_host", @"--disable", @"apps", @"--disable", @"plugins", @"-c", @"web_search=\"disabled\"", @"-"],
         @[@"qodercli", @"-p", @"--tools", @"", @"--strict-mcp-config", @"--no-session-persistence", @"--setting-sources", @"", @"--output-format", @"text"]];
+    *players = own.length > 0;
     if (own.length) {
         NSArray *words = [[own componentsSeparatedByString:@"\n"].firstObject componentsSeparatedByString:@" "];
         commands = @[[words filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"length > 0"]]];
@@ -169,6 +174,34 @@ static inline NSArray<NSArray<NSString *> *> *mng_summary_commands(NSString *fol
         if (path) [found addObject:[@[path] arrayByAddingObjectsFromArray:[command subarrayWithRange:NSMakeRange(1, command.count - 1)]]];
     }
     return found;
+}
+/* A script's own #!/usr/bin/env node, often beside it; a Finder start has a short PATH. */
+static inline void mng_summary_path(NSString *executable, NSArray<NSString *> *dirs) {
+    NSArray *path = [@[executable.stringByDeletingLastPathComponent] arrayByAddingObjectsFromArray:dirs];
+    setenv("PATH", [path componentsJoinedByString:@":"].fileSystemRepresentation, 1);
+}
+/* --ai-login: the own login of the first command line there is, attached to the terminal; when it logged in, `refresh`.
+   No command from a file: the player's ai-command is not involved. Not NSTask: that takes the terminal away from a login
+   that reads a code. */
+static inline int mng_summary_login(NSArray<NSString *> *dirs, void (^refresh)(void)) {
+    for (NSArray<NSString *> *command in @[@[@"claude", @"auth", @"login"], @[@"codex", @"login"], @[@"qodercli", @"login"]]) {
+        NSString *path = mng_summary_find(command[0], dirs);
+        if (!path) continue;
+        char *arguments[4] = {(char *)path.fileSystemRepresentation};
+        for (NSUInteger i = 1; i < command.count; i++) arguments[i] = (char *)command[i].UTF8String;
+        mng_summary_path(path, dirs);
+        extern char **environ;
+        pid_t pid = 0;
+        int status = 1;
+        if (posix_spawn(&pid, arguments[0], NULL, NULL, arguments, environ)) return 1;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+        int code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+        /* Closing the window now must not end the refresh: its AI call is paid for, and the page would wait until the next launch. */
+        if (!code) { signal(SIGHUP, SIG_IGN); refresh(); }
+        return code;
+    }
+    puts(TOTK_UI("没有找到 AI 命令行（claude、codex 或 qodercli）。", "No AI command line found (claude, codex or qodercli)."));
+    return 1;
 }
 /* The command's output, or nil when it failed or ran out of time. Its own process group, so what it started goes with it;
    files for stdin and stdout, so no pipe can hang; cwd an empty temporary folder. */
@@ -186,8 +219,7 @@ static inline NSData *mng_summary_ask(NSArray<NSString *> *command, NSString *pr
         NSMutableArray *held = [NSMutableArray array];
         char **arguments = calloc(command.count + 1, sizeof *arguments);
         for (NSUInteger i = 0; i < command.count; i++) { [held addObject:command[i]]; arguments[i] = (char *)command[i].UTF8String; }
-        NSArray *path = [@[command[0].stringByDeletingLastPathComponent] arrayByAddingObjectsFromArray:dirs];
-        setenv("PATH", [path componentsJoinedByString:@":"].fileSystemRepresentation, 1);   /* a script's own #!/usr/bin/env node, often beside it; a Finder start has a short PATH */
+        mng_summary_path(command[0], dirs);
         posix_spawn_file_actions_t actions;
         posix_spawnattr_t attributes;
         posix_spawn_file_actions_init(&actions);
@@ -245,97 +277,125 @@ static inline void mng_summary_write(NSString *folder, NSDictionary *document) {
     [data writeToFile:[folder stringByAppendingPathComponent:@"summary.json"] options:NSDataWritingAtomic error:nil];   /* a temporary file and a rename */
 }
 
+static inline BOOL mng_summary_ai_on(NSString *folder) { return [NSFileManager.defaultManager fileExistsAtPath:[folder stringByAppendingPathComponent:@"ai"]]; }
+
+/* One pass of a refresh, the lock held. */
+static inline void mng_summary_pass(NSString *folder, NSString *game, NSString *commit, NSString *app, double now, BOOL ai, MNGSummaryFetch fetch, NSArray<NSString *> *dirs, double limit) {
+    NSData *saved = [NSData dataWithContentsOfFile:[folder stringByAppendingPathComponent:@"summary.json"]];
+    NSDictionary *old = saved ? [NSJSONSerialization JSONObjectWithData:saved options:0 error:nil] : nil;
+    if (![old isKindOfClass:NSDictionary.class] || ![old[@"version"] isEqual:@1]) old = nil;
+    BOOL revision = mng_summary_revision(commit);
+    NSString *onOff = ai ? @"on" : @"off", *base = revision ? commit : @"";
+    NSMutableDictionary *document = [@{@"version": @1, @"game": game, @"generated_at": @(now), @"key": [NSString stringWithFormat:@"%@||%@", base, onOff], @"source": @"fallback",
+        @"installed": revision ? mng_summary_short(commit) : @"", @"installed_date": @"", @"head": @"", @"total": @0, @"status": @"unknown",
+        @"verdict": @"", @"reason": @"", @"points": @[], @"note": @"", @"copy": @"", @"login": @NO} mutableCopy];
+    if (!revision) {
+        document[@"note"] = @(TOTK_UI("这个 App 没有记录它的提交", "This app does not record its commit"));
+        mng_summary_write(folder, document);
+        return;
+    }
+    NSString *query = [NSString stringWithFormat:@"compare/%@...main?per_page=%d", commit, MNG_SUMMARY_PAGE];
+    NSInteger http = 0;
+    NSDictionary *first = fetch(query, &http);
+    if (http == 404) {
+        document[@"note"] = @(TOTK_UI("上游没有这个提交，可能是本地构建的版本", "Upstream does not have this commit; this may be a local build"));
+        mng_summary_write(folder, document);
+        return;
+    }
+    NSNumber *aheadBy = mng_summary_dig(first, @[@"ahead_by"], NSNumber.class);
+    NSString *state = mng_summary_dig(first, @[@"status"], NSString.class);
+    BOOL usable = http == 200 && aheadBy && CFGetTypeID((__bridge CFTypeRef)aheadBy) != CFBooleanGetTypeID() && aheadBy.integerValue >= 0 &&
+        [@[@"ahead", @"diverged", @"behind", @"identical"] containsObject:state ?: @""];
+    NSArray *commits = usable ? mng_summary_commits(query, first, aheadBy.integerValue, fetch) : nil;
+    if (!commits) {
+        NSString *unreachable = @(TOTK_UI("连不上 GitHub", "Could not reach GitHub"));
+        if ([mng_summary_dig(old, @[@"key"], NSString.class) hasPrefix:commit]) {   /* what it knew about this version stays */
+            if (ai && [old[@"source"] isEqual:@"fallback"] && ![old[@"note"] length]) {   /* the page would go on saying the AI is at work */
+                NSMutableDictionary *noted = [old mutableCopy];
+                noted[@"note"] = unreachable;
+                mng_summary_write(folder, noted);
+            }
+            return;
+        }
+        document[@"note"] = unreachable;
+        mng_summary_write(folder, document);
+        return;
+    }
+    NSString *date = mng_summary_dig(first, @[@"base_commit", @"commit", @"committer", @"date"], NSString.class);
+    if (date.length >= 10) document[@"installed_date"] = [date substringToIndex:10];
+    if (!aheadBy.integerValue) {
+        document[@"status"] = @"latest"; document[@"verdict"] = @"skip"; document[@"head"] = mng_summary_short(commit);
+        document[@"reason"] = @(TOTK_UI("上游没有新的提交", "Upstream has no newer commits"));
+        document[@"key"] = [NSString stringWithFormat:@"%@|%@|%@", commit, commit, onOff];
+        mng_summary_write(folder, document);
+        return;
+    }
+    NSMutableArray<NSDictionary *> *shown = [NSMutableArray array];
+    NSString *head = nil;
+    for (id one in commits) {
+        NSString *sha = mng_summary_dig(one, @[@"sha"], NSString.class);
+        if (mng_summary_revision(sha)) head = sha;
+        if (mng_summary_commit_shown(one)) [shown addObject:one];
+    }
+    NSString *key = [NSString stringWithFormat:@"%@|%@|%@", commit, head ?: @"", onOff];
+    NSString *quoted = app;
+    for (NSString *special in @[@"\\", @"\"", @"$", @"`"]) quoted = [quoted stringByReplacingOccurrencesOfString:special withString:[@"\\" stringByAppendingString:special]];
+    NSString *copy = [NSString stringWithFormat:@"git pull\npython3.14 update_runtime.py \"%@\"\n", quoted];
+    if (ai && [old[@"key"] isEqual:key] && [old[@"source"] isEqual:@"model"]) {   /* same question, answered: the time, and where the app is now */
+        NSMutableDictionary *again = [old mutableCopy];
+        again[@"generated_at"] = @(now);
+        again[@"copy"] = copy;
+        mng_summary_write(folder, again);
+        return;
+    }
+    [document addEntriesFromDictionary:@{@"status": @"behind", @"key": key, @"head": head ? mng_summary_short(head) : @"", @"total": aheadBy, @"copy": copy}];
+    NSMutableArray *titles = [NSMutableArray array];
+    for (NSDictionary *one in shown.reverseObjectEnumerator) {
+        if (titles.count == MNG_SUMMARY_TITLES) break;
+        [titles addObject:mng_summary_title(one)];
+    }
+    document[@"points"] = titles;
+    NSDictionary *answer = nil;
+    if (ai && shown.count) {
+        mng_summary_write(folder, document);   /* the page has this version's titles while the AI thinks */
+        BOOL players = NO;
+        NSArray<NSArray<NSString *> *> *commands = mng_summary_commands(folder, dirs, &players);
+        NSUInteger failed = 0;
+        for (NSArray<NSString *> *command in commands) {
+            if (!mng_summary_ai_on(folder)) break;   /* turned off meanwhile */
+            NSData *output = mng_summary_ask(command, mng_summary_prompt(game, shown, aheadBy.integerValue), dirs, limit);
+            if (output) { answer = mng_summary_answer(output); break; }   /* it ran: a bad answer does not spend another account */
+            failed++;
+        }
+        if (!players && !commands.count) document[@"note"] = @(TOTK_UI("没有找到 AI 命令行（claude、codex 或 qodercli），装好并登录一个后这里会显示总结", "No AI command line found (claude, codex or qodercli). Install one and log in, and the summary shows here"));
+        else if (!players && failed == commands.count) {   /* as a logged-out one does, each of them */
+            document[@"note"] = @(TOTK_UI("AI 还没登录，或这次没有回答", "The AI is not logged in, or did not answer this time"));
+            document[@"login"] = @YES;
+        }
+    }
+    if (answer) {
+        [document addEntriesFromDictionary:answer];
+        document[@"source"] = @"model";
+    } else if (ai && ![document[@"note"] length]) {
+        document[@"note"] = @(TOTK_UI("这次没有拿到 AI 总结，只列出提交标题", "No AI summary this time; listing the commit titles only"));
+    }
+    mng_summary_write(folder, document);
+}
+
 /* One whole refresh; a second one while it runs leaves at once. `folder` is <data>/update, `dirs` where commands are looked
-   for, `limit` the seconds a command gets. */
+   for, `limit` the seconds a command gets. The page's button starts one too, and that one leaves when this one holds the
+   lock: so, looked at after letting go, a choice changed meanwhile gets another pass. */
 static inline void mng_summary_run(NSString *folder, NSString *game, NSString *commit, NSString *app, double now, MNGSummaryFetch fetch, NSArray<NSString *> *dirs, double limit) {
     [NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
-    int lock = open([folder stringByAppendingPathComponent:@"summary.lock"].fileSystemRepresentation, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
-    if (lock < 0) return;
-    if (flock(lock, LOCK_EX | LOCK_NB)) { close(lock); return; }
-    @try {
-        NSData *saved = [NSData dataWithContentsOfFile:[folder stringByAppendingPathComponent:@"summary.json"]];
-        NSDictionary *old = saved ? [NSJSONSerialization JSONObjectWithData:saved options:0 error:nil] : nil;
-        if (![old isKindOfClass:NSDictionary.class] || ![old[@"version"] isEqual:@1]) old = nil;
-        BOOL revision = mng_summary_revision(commit), ai = [NSFileManager.defaultManager fileExistsAtPath:[folder stringByAppendingPathComponent:@"ai"]];
-        NSString *onOff = ai ? @"on" : @"off", *base = revision ? commit : @"";
-        NSMutableDictionary *document = [@{@"version": @1, @"game": game, @"generated_at": @(now), @"key": [NSString stringWithFormat:@"%@||%@", base, onOff], @"source": @"fallback",
-            @"installed": revision ? mng_summary_short(commit) : @"", @"installed_date": @"", @"head": @"", @"total": @0, @"status": @"unknown",
-            @"verdict": @"", @"reason": @"", @"points": @[], @"note": @"", @"copy": @""} mutableCopy];
-        if (!revision) {
-            document[@"note"] = @(TOTK_UI("这个 App 没有记录它的提交", "This app does not record its commit"));
-            mng_summary_write(folder, document);
-            return;
-        }
-        NSString *query = [NSString stringWithFormat:@"compare/%@...main?per_page=%d", commit, MNG_SUMMARY_PAGE];
-        NSInteger http = 0;
-        NSDictionary *first = fetch(query, &http);
-        if (http == 404) {
-            document[@"note"] = @(TOTK_UI("上游没有这个提交，可能是本地构建的版本", "Upstream does not have this commit; this may be a local build"));
-            mng_summary_write(folder, document);
-            return;
-        }
-        NSNumber *aheadBy = mng_summary_dig(first, @[@"ahead_by"], NSNumber.class);
-        NSString *state = mng_summary_dig(first, @[@"status"], NSString.class);
-        BOOL usable = http == 200 && aheadBy && CFGetTypeID((__bridge CFTypeRef)aheadBy) != CFBooleanGetTypeID() && aheadBy.integerValue >= 0 &&
-            [@[@"ahead", @"diverged", @"behind", @"identical"] containsObject:state ?: @""];
-        NSArray *commits = usable ? mng_summary_commits(query, first, aheadBy.integerValue, fetch) : nil;
-        if (!commits) {
-            if ([mng_summary_dig(old, @[@"key"], NSString.class) hasPrefix:commit]) return;   /* what it knew about this version stays */
-            document[@"note"] = @(TOTK_UI("连不上 GitHub", "Could not reach GitHub"));
-            mng_summary_write(folder, document);
-            return;
-        }
-        NSString *date = mng_summary_dig(first, @[@"base_commit", @"commit", @"committer", @"date"], NSString.class);
-        if (date.length >= 10) document[@"installed_date"] = [date substringToIndex:10];
-        if (!aheadBy.integerValue) {
-            document[@"status"] = @"latest"; document[@"verdict"] = @"skip"; document[@"head"] = mng_summary_short(commit);
-            document[@"reason"] = @(TOTK_UI("上游没有新的提交", "Upstream has no newer commits"));
-            document[@"key"] = [NSString stringWithFormat:@"%@|%@|%@", commit, commit, onOff];
-            mng_summary_write(folder, document);
-            return;
-        }
-        NSMutableArray<NSDictionary *> *shown = [NSMutableArray array];
-        NSString *head = nil;
-        for (id one in commits) {
-            NSString *sha = mng_summary_dig(one, @[@"sha"], NSString.class);
-            if (mng_summary_revision(sha)) head = sha;
-            if (mng_summary_commit_shown(one)) [shown addObject:one];
-        }
-        NSString *key = [NSString stringWithFormat:@"%@|%@|%@", commit, head ?: @"", onOff];
-        NSString *quoted = app;
-        for (NSString *special in @[@"\\", @"\"", @"$", @"`"]) quoted = [quoted stringByReplacingOccurrencesOfString:special withString:[@"\\" stringByAppendingString:special]];
-        NSString *copy = [NSString stringWithFormat:@"git pull\npython3.14 update_runtime.py \"%@\"\n", quoted];
-        if (ai && [old[@"key"] isEqual:key] && [old[@"source"] isEqual:@"model"]) {   /* same question, answered: the time, and where the app is now */
-            NSMutableDictionary *again = [old mutableCopy];
-            again[@"generated_at"] = @(now);
-            again[@"copy"] = copy;
-            mng_summary_write(folder, again);
-            return;
-        }
-        [document addEntriesFromDictionary:@{@"status": @"behind", @"key": key, @"head": head ? mng_summary_short(head) : @"", @"total": aheadBy, @"copy": copy}];
-        NSMutableArray *titles = [NSMutableArray array];
-        for (NSDictionary *one in shown.reverseObjectEnumerator) {
-            if (titles.count == MNG_SUMMARY_TITLES) break;
-            [titles addObject:mng_summary_title(one)];
-        }
-        document[@"points"] = titles;
-        NSDictionary *answer = nil;
-        if (ai && shown.count) {
-            mng_summary_write(folder, document);   /* the page has this version's titles while the AI thinks */
-            for (NSArray<NSString *> *command in mng_summary_commands(folder, dirs)) {
-                if (![NSFileManager.defaultManager fileExistsAtPath:[folder stringByAppendingPathComponent:@"ai"]]) break;   /* turned off meanwhile */
-                NSData *output = mng_summary_ask(command, mng_summary_prompt(game, shown, aheadBy.integerValue), dirs, limit);
-                if (output) { answer = mng_summary_answer(output); break; }   /* it ran: a bad answer does not spend another account */
-            }
-        }
-        if (answer) {
-            [document addEntriesFromDictionary:answer];
-            document[@"source"] = @"model";
-        } else if (ai) {
-            document[@"note"] = @(TOTK_UI("这次没有拿到 AI 总结，只列出提交标题", "No AI summary this time; listing the commit titles only"));
-        }
-        mng_summary_write(folder, document);
-    } @finally { close(lock); }
+    BOOL ai;
+    do {
+        int lock = open([folder stringByAppendingPathComponent:@"summary.lock"].fileSystemRepresentation, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+        if (lock < 0) return;
+        if (flock(lock, LOCK_EX | LOCK_NB)) { close(lock); return; }
+        ai = mng_summary_ai_on(folder);
+        mng_summary_pass(folder, game, commit, app, now, ai, fetch, dirs, limit);
+        close(lock);
+    } while (ai != mng_summary_ai_on(folder));
 }
 
 /* The real network, one request. */

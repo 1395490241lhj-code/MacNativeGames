@@ -800,7 +800,18 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
  fprintf(stderr,"[totk] settings: controller %s -> %s\n",controller_physical_names[physical],action<0?"nothing":controller_switch_names[action]);
  [self refreshBindings];
 }
--(void)refresh{for(TOTKSettingRow *r in self.allRows)[r refresh];[self refreshBindings];if(self.page==SETTINGS_PAGE_UPDATE){[self refreshUpdatePage];[self updateTargets];}}
+/* A new document changes the 更新 page's buttons with no input from the player, and A acts at once. The place stays on its
+   button. When that goes, the next A only shows the new place, as that can be the AI switch, the player's consent (always
+   last, so the first button is another one if there is one). */
+-(void)refreshUpdateTargets{
+ NSInteger at=self.controllerIndex;NSView *place=at>=0&&at<(NSInteger)self.controllerTargets.count?self.controllerTargets[(NSUInteger)at]:nil;
+ [self refreshUpdatePage];
+ NSUInteger now=place?[self.updatePageTargets indexOfObject:place]:NSNotFound;
+ if(now!=NSNotFound)self.controllerIndex=(NSInteger)now;
+ else if(place){self.controllerIndex=0;g_settings_controller_active=NO;}
+ [self updateTargets];
+}
+-(void)refresh{for(TOTKSettingRow *r in self.allRows)[r refresh];[self refreshBindings];if(self.page==SETTINGS_PAGE_UPDATE)[self refreshUpdateTargets];}
 -(void)refreshBindings{
  if(self.page!=SETTINGS_PAGE_BINDINGS)return;
  if(self.drawings){[self.keyboardDiagram setNeedsDisplay:YES];[self.padDiagram setNeedsDisplay:YES];return;}

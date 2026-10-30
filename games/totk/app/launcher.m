@@ -208,8 +208,9 @@ static NSString *game_data_ask(NSArray<NSString *> *looked, unsigned long long s
     }
 }
 
-/* --update-summary: what mng_summary_start below runs, detached, for the settings panel's update page. */
+/* --update-summary: what mng_summary_start below and the settings panel's update page run, detached, for that page. */
 static void update_summary_run(void) {
+    setpriority(PRIO_PROCESS, 0, 20);
     const char *controls = getenv("TOTK_CONTROLS");   // the folder the page reads
     NSString *data = controls && *controls ? @(controls).stringByDeletingLastPathComponent
         : [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MacNativeGames/" GAME_FOLDER];
@@ -230,6 +231,8 @@ int main(int argc, char **argv) {
             update_summary_run();
             return 0;
         }
+        if (argc > 1 && !strcmp(argv[1], "--ai-login"))   // the page's login button, in a terminal
+            return mng_summary_login(mng_summary_dirs(), ^{ update_summary_run(); });
         NSString *root = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"totk"];
         NSString *binary = [root stringByAppendingPathComponent:@"build/totk-native"];
         /* --check (build_app.py, once after packaging): only look that the game is there and exit. The first run of a new

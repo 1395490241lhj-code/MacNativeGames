@@ -13,6 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(sys.platform == 'darwin', 'AppKit requires macOS')
 class SettingsPanel(unittest.TestCase):
+    def test_update_page_never_forks(self):
+        self.assertNotIn('fork(', (ROOT / 'games/totk/runtime/update_tab.h').read_text(encoding='utf-8'))   # the game's address space is huge
+
     def test_current_modes_and_refresh(self):
         compiler = shutil.which('clang')
         if not compiler:
