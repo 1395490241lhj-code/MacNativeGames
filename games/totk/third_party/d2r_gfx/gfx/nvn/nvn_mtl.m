@@ -7665,11 +7665,14 @@ static os_unfair_lock g_par_miss_hex_lk = OS_UNFAIR_LOCK_INIT;
    a 5-minute Breath of the Wild route, Mac, once the fill wrote B / T rows too). Such a pipeline without its recipe (a
    prediction guess) is not archived: nil. */
 static NSString *pso_archive_key(const pso_key *k, NvShader *vs, NvShader *fs, int merged, NSString *variant) {
-    if (fs && fs->ssao_slot) return nil;   // TOTK_SSAO: not archived (nil = not archived: par_archive_for / par_add)
     if (!variant && !merged && ((k->a2c & PSO_VBORDER) || k->fsfn)) return nil;
     pso_skey sk; pso_skey_from(k, vs, fs, merged, NULL, &sk);
     NSString *key;
-    if (variant) { NSMutableData *b = [NSMutableData dataWithBytes:&sk length:sizeof sk]; [b appendData:[variant dataUsingEncoding:NSUTF8StringEncoding]]; key = par_hash(b.bytes, b.length); }
+    /* TOTK_SSAO (totk_ssao.h): a patched AO shader is another function than the shipped one with the same key, so its
+       pipelines get keys of their own (2026-10-30: archived, the packaging tool patches them too); TOTK_SSAO=0's
+       shipped ones keep the old keys. The parameters sit in c1, not in the pipeline: one key for every level. */
+    NSString *tail = fs && fs->ssao_slot ? (variant ? [variant stringByAppendingString:@"|ssao"] : @"ssao") : variant;
+    if (tail) { NSMutableData *b = [NSMutableData dataWithBytes:&sk length:sizeof sk]; [b appendData:[tail dataUsingEncoding:NSUTF8StringEncoding]]; key = par_hash(b.bytes, b.length); }
     else key = par_hash(&sk, sizeof sk);
     static int on = -1; if (on < 0) { const char *p = getenv("TOTK_PAR_MISS_LOG"); on = p && *p; }
     if (on) { char hex[sizeof sk * 2 + 1]; pso_skey_hex(&sk, hex);

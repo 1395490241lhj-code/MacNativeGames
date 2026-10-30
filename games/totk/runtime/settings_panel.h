@@ -23,9 +23,9 @@
      ambient occlusion    off / 1.5x / 2x / 3x, default off  dm_gfx_ssao_* (gfx/nvn/totk_ssao.h, PR #1316), saved in ssao.txt
                                                              (off or the strength and radius in percent); Tears of the
                                                              Kingdom 1.4.3 and Breath of the Wild 1.9.0 only. Its shaders
-                                                             are patched at load, so turning it on from off comes at the
-                                                             next launch (the title says so); a level change or off acts
-                                                             at once. TOTK_SSAO decides first (greyed out)
+                                                             are always the patched ones on the Mac (off: the stock AO,
+                                                             bit for bit), so every choice acts at once (user 2026-10-30);
+                                                             TOTK_SSAO / _STRENGTH / _RADIUS decide first (greyed out)
    Input
      controller type      auto / Xbox / PlayStation / Switch runtime_gamepad_type_set (gamepad.m), saved
      DualSense bow trigger switch                            runtime_triggers_choose (gamepad_feedback.m), saved in
@@ -263,18 +263,18 @@ static NSString *settings_pad_auto_text(void) {
 }
 
 /* Ambient occlusion: off, or the shadow pre-pass's AO with strength and radius both scaled (1.5x is the PR's tested
-   level). Off at the start of this run and on now: the title says it comes at the next launch. */
+   level), applied at once. A run whose shaders carry no parameters (TOTK_SSAO=0) shows its one value. */
 static TOTKSettingRow *settings_ssao_row(void) {
  NSString *t=settings_text("环境光遮蔽增强","Stronger ambient occlusion");
 #ifndef SETTINGS_SSAO
  return settings_fixed(t,settings_text("这个版本没有","Not in this version"));
 #else
  if(dm_gfx_ssao_locked())return settings_fixed(t,settings_text("由 TOTK_SSAO 设置","Set by TOTK_SSAO"));
+ if(!dm_gfx_ssao_live())return settings_fixed(t,settings_text("关（游戏原样）","Off (as the game has it)"));
  NSMutableArray<NSNumber *> *values=[@[@0,@150,@200,@300] mutableCopy];
  if(![values containsObject:@(settingsSsao)]){[values addObject:@(settingsSsao)];[values sortUsingSelector:@selector(compare:)];}
  NSMutableArray<NSString *> *choices=[NSMutableArray array];
  for(NSNumber *v in values)[choices addObject:v.intValue?[NSString stringWithFormat:@"%g×",v.intValue/100.0]:settings_text("关（游戏原样）","Off (as the game has it)")];
- if(settingsSsao&&!dm_gfx_ssao_live())t=[t stringByAppendingString:settings_text("（下次启动生效）"," (from the next launch)")];
  return settings_row(t,choices,values,^int{return settingsSsao;},^(int v){
   settingsSsao=v;dm_gfx_ssao_set(v);
   if(v)settings_save_int("ssao.txt",v,"ambient occlusion");else runtime_setting_save("ssao.txt","off","ambient occlusion");});

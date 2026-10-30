@@ -22,7 +22,7 @@ void dm_gfx_set_flag(const char *name, int value) {
     else abort();
 }
 /* gfx/nvn/totk_ssao.h's row calls (PR #1316): whether this run patched the AO shaders, and the level last set. */
-static int fakeSsaoLive, fakeSsaoSet = -1, fakeSsaoStart = -1;
+static int fakeSsaoLive = 1, fakeSsaoSet = -1, fakeSsaoStart = -1;
 void dm_gfx_ssao_start(int pct) { fakeSsaoStart = pct; }
 int dm_gfx_ssao_locked(void) { return 0; }
 int dm_gfx_ssao_live(void) { return fakeSsaoLive; }
@@ -369,16 +369,15 @@ int main(int argc, const char **argv) { @autoreleasepool {
     /* Switches. */
     assert(!switched(@"Edge smoothing")); flip(@"Edge smoothing", YES); assert(taa_enabled() && switched(@"Edge smoothing"));
     flip(@"Edge smoothing", NO); assert(!taa_enabled());
-    /* Stronger ambient occlusion (PR #1316): off by default; a level picked in a run that did not patch the shaders is
-       saved for the next launch (its title says so once the rows are made again), and acts at once in a run that did. */
+    /* Stronger ambient occlusion (PR #1316): off by default; every level acts at once (the Mac's shaders always carry the
+       parameters) and is saved; a run without them (TOTK_SSAO=0) shows off, greyed out (rows are made at each opening). */
 #if defined(TOTK_GAME_V143) || defined(GAME_BOTW190)
     shows(@"Stronger ambient occlusion", @"Off (as the game has it)"); assert(fakeSsaoStart == -1);
-    pick(@"Stronger ambient occlusion", @"1.5×"); assert(settingsSsao == 150 && fakeSsaoSet == -1 && !strcmp(savedName, "ssao.txt") && !strcmp(savedWord, "150"));
-    press(18); press(18); assert(settingsOpen && [row(@"Stronger ambient occlusion").title hasSuffix:@"(from the next launch)"]);
-    press(18); fakeSsaoLive = 1; press(18); assert(settingsOpen && ![row(@"Stronger ambient occlusion").title hasSuffix:@"(from the next launch)"]);
+    pick(@"Stronger ambient occlusion", @"1.5×"); assert(settingsSsao == 150 && fakeSsaoSet == 150 && !strcmp(savedName, "ssao.txt") && !strcmp(savedWord, "150"));
     pick(@"Stronger ambient occlusion", @"2×"); assert(fakeSsaoSet == 200 && !strcmp(savedWord, "200"));
     pick(@"Stronger ambient occlusion", @"Off (as the game has it)"); assert(!settingsSsao && fakeSsaoSet == 0 && !strcmp(savedWord, "off"));
-    fakeSsaoLive = 0;
+    press(18); fakeSsaoLive = 0; press(18); assert(settingsOpen && !menu(@"Stronger ambient occlusion").enabled);
+    press(18); fakeSsaoLive = 1; press(18); assert(settingsOpen && menu(@"Stronger ambient occlusion").enabled);
 #else
     shows(@"Stronger ambient occlusion", @"Not in this version"); assert(!menu(@"Stronger ambient occlusion").enabled);
 #endif
