@@ -70,8 +70,9 @@ fragment tests flag (`prepare_shader_seed.py translation_input`; `totk_shader_rt
 3,416 of 1.4.3's 28,771 shaders differ from another only in control bytes nothing reads, nearly all at +0x7d0..+0x7df
 (3,266 effects, 79 agl, 55 `.bfsha`, 16 layout); in the Ryujinx seed all 3,348 of them with a default variant had MSL
 and reflection byte-identical to that shader's. The seed translates the first by key; each other one gets a `.variants`
-index naming the first one's variants, and aliases from its own variant names for the warm-up rows. The runtime loads a
-variant by the name its row gives, so these shaders share one translation, one Metal library and their pipelines.
+index naming the first one's variants, through which packaging names warm-up rows recorded with its own variant names
+(`shader_list.py resolve`). The runtime loads a variant by the name its row gives, so these shaders share one
+translation, one Metal library and their pipelines.
 
 Colour outputs work the same way (2026-10-26): on the Switch the fragment shader writes untyped registers and the
 colour unit takes their bits as integers for a pure integer render target and as floats otherwise; Metal refuses a

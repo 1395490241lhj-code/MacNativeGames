@@ -269,9 +269,7 @@ class ShaderKeyScope(unittest.TestCase):
             self.assertFalse(any(p.name.startswith(second+'-') for p in out.iterdir()))
             self.assertEqual((manifest['served_by_another'], manifest['startup_shaders'], manifest['shaders']), (1, 3, 4))
             self.assertIn(second+'.variants', manifest['files'])
-            aliases = (root/'seed.aliases.tsv').read_text().splitlines()
-            self.assertIn(f'{second}-{seed.SUFFIX}\t{first}-{seed.SUFFIX}', aliases)
-            self.assertIn(f'{second}-{seed.suffix(answers)}\t{first}-{seed.suffix(answers)}', aliases)
+            self.assertFalse((root/'seed.aliases.tsv').exists())   # rows naming the twin's own variants: shader_list.py resolve
             self.assertTrue(seed.builtin_serves(out, second, {}))   # the shared list's prune reads its default the same way
 
     def prepare_with_service(self, root, output, listed=(), translator_text='', fail=(), inventory_calls=None, compare=(),

@@ -733,7 +733,7 @@ def prepare(romfs, output, translator, spirv_cross, version, shader_list=None, m
     print(f'{len(extra)} more shaders read where the shared list locates them (agl .sharcb, game module)', flush=True)
     # Shaders with the same translation_input are translated once, as the first of them by key: the others get a .variants
     # index naming its variants (the runtime loads a variant by the name its row gives, and shares the Metal library of
-    # one name) and aliases from their own variant names, which warm-up rows recorded before name.
+    # one name); shader_list.py resolve names warm-up rows recorded with their own names through that index.
     same = {}
     for key in sorted(shaders):
         stage, control, code, _ = shaders[key]
@@ -742,7 +742,6 @@ def prepare(romfs, output, translator, spirv_cross, version, shader_list=None, m
     print(f'{len(served)} shaders translate as another one does and are served by its variants', flush=True)
     jobs = plan({key: shader for key, shader in shaders.items() if key not in served}, {served.get(key, key) for key in startup},
                 {(served.get(key, key), deps) for key, deps in listed}, GAMES[game]['all_default'])
-    aliases = {}   # listed variant -> the variant serving its bind state (write_aliases)
     # One translator service per core. A shader's jobs (its default bind state, then its listed ones) run in order on
     # one service, because whether a listed job is translated and kept depends on that shader's earlier results; the
     # files each job writes are named after its own shader. The results are then taken in the order of `jobs`, so the
@@ -845,8 +844,6 @@ def prepare(romfs, output, translator, spirv_cross, version, shader_list=None, m
             continue
         (staging/(key+'.variants')).write_text((staging/(first+'.variants')).read_text())
         produced[key] = produced[first]
-        for old, new in [(v, v) for v in produced[first].values()] + [a for a in aliases.items() if a[0].startswith(first+'-')]:
-            aliases[key+old[len(first):]] = new   # <key>-<suffix>: the same bind state's variant of the shader translated for it
     failed, rows, completed = [], [], []
     for result in outcome+[result for key in sorted(derived) for result in derived[key]]:
         if result and result[0] == 'ok':
