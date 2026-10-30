@@ -240,8 +240,13 @@ int runtime_motion_read(RuntimeMotionState *out, int max) {
     return n;
 }
 void runtime_motion_start(void) { pthread_mutex_lock(&lock); restart = 1; pthread_mutex_unlock(&lock); }
-/* The dead zone in deg/s when TOTK_GYRO_DEADZONE is unset: the HID reader sets 1.2, a GameController controller 0. */
-void runtime_motion_deadzone_default(double deg) { pthread_mutex_lock(&lock); deadzone_default = deg; deadzone = -1; pthread_mutex_unlock(&lock); }
+/* The dead zone in deg/s when TOTK_GYRO_DEADZONE is unset: the HID reader sets 1.2, a GameController controller 0.
+   Every source change comes through here, so a learned gyro bias starts over: one controller's bias is not another's. */
+void runtime_motion_deadzone_default(double deg) {
+    pthread_mutex_lock(&lock); deadzone_default = deg; deadzone = -1;
+    if (bias_mode == 1) { memset(bias, 0, sizeof bias); memset(bias_logged, 0, sizeof bias_logged); bias_known = 0; win_n = 0; }
+    pthread_mutex_unlock(&lock);
+}
 void runtime_motion_live(int on) {
     pthread_mutex_lock(&lock); controller_live = on; live = controller_live || phone_live || mouse_owns;
     if (on && !mouse_owns) restart = 1; pthread_mutex_unlock(&lock);

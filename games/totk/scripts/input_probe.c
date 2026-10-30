@@ -184,6 +184,9 @@ static void feedback_checks(void){
   need(near3(buf.s[0].gyro,0,0,0,0.002),"a still controller's gyro bias is learned and taken off");
   feed(250,0,0,-1,b[0],b[1],b[2]+M_PI/2);probe_now+=1000000;sstates(&n,buf.s,1,&six);
   need(near(buf.s[0].gyro[2],0.25,0.002)&&near(buf.s[0].gyro[0],0,0.002)&&near(buf.s[0].gyro[1],0,0.002),"a turn of 90 degrees a second on top of the bias: 0.25 rev/s, the bias not learned from it");
+  /* Another controller (every source change sets its dead zone): the old one's bias is dropped, not taken off its samples. */
+  runtime_motion_deadzone_default(0);feed(50,0,0,-1,0,0,0);probe_now+=1000000;sstates(&n,buf.s,1,&six);
+  need(near3(buf.s[0].gyro,0,0,0,0.002),"another controller: the learned bias starts over");
   runtime_motion_live(0);}
  probe_clock_fixed=0;
 }
