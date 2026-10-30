@@ -742,6 +742,7 @@ int runtime_gamepad_battery_left_percent(void) { return atomic_load(&hidBatteryP
 int runtime_gamepad_battery_percent(void) {
     int hid = atomic_load(&hidBatteryPercent);
     if (hid >= 0) return hid;
+    if ((hid = atomic_load(&hidBatteryLeftPercent)) >= 0) return hid;   /* a left Joy-Con alone */
     for (GCController *controller in GCController.controllers)
         if (controller.battery && controller.battery.batteryState != GCDeviceBatteryStateUnknown)
             return (int)lroundf(controller.battery.batteryLevel * 100.0f);

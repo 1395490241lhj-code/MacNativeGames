@@ -519,6 +519,10 @@ static void hid_write(IOHIDDeviceRef d, uint8_t id, const uint8_t *body, int n) 
         CFRelease(d);
     });
 }
+/* A closed device gives up its packet counter (after the reports queued for it), or the next two devices would share one. */
+static void hid_count_forget(IOHIDDeviceRef d) {   /* any queue, hidOut made */
+    dispatch_async(hidOut, ^{ for (int i = 0; i < 2; i++) if (hidCountDev[i] == d) { hidCountDev[i] = NULL; hidCount[i] = 0; } });
+}
 static void hid_subcommand_on(IOHIDDeviceRef d, uint8_t cmd, const uint8_t *arg, int n) {   /* main queue */
     uint8_t body[47] = {0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40, cmd};   /* neutral rumble */
     memcpy(body + 9, arg, n);
@@ -626,7 +630,7 @@ static void hid_close_now(void) {   /* main queue */
     IOHIDDeviceRegisterInputReportWithTimeStampCallback(hidDevice, hidReport, sizeof hidReport, NULL, NULL);   /* hid_imu_start's (PR #309) */
     IOHIDDeviceUnscheduleFromRunLoop(hidDevice, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
     IOHIDDeviceClose(hidDevice, kIOHIDOptionsTypeNone);
-    CFRelease(hidDevice); hidDevice = NULL;
+    hid_count_forget(hidDevice); CFRelease(hidDevice); hidDevice = NULL;
     CFRelease(hidManager); hidManager = NULL; imuProfile = NULL;
     runtime_gamepad_hid_battery(0, -1);
 }
@@ -676,6 +680,7 @@ static void hid_left_report(void *ctx, IOReturn result, void *sender, IOHIDRepor
     runtime_gamepad_hid_battery(1, level > 4 ? 100 : level * 25);
 }
 static IOReturn hid_left_open(void) {   /* main queue */
+    hid_out_queue();
     if (hidLeft) return kIOReturnSuccess;
     hidLeftManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     IOHIDManagerSetDeviceMatching(hidLeftManager, (__bridge CFDictionaryRef)@{@kIOHIDVendorIDKey: @0x057e, @kIOHIDProductIDKey: @0x2006});
@@ -694,7 +699,7 @@ static void hid_left_close_now(void) {   /* main queue */
     IOHIDDeviceUnscheduleFromRunLoop(hidLeft, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
     runtime_gamepad_hid_battery(1, -1);
     IOHIDDeviceClose(hidLeft, kIOHIDOptionsTypeNone);
-    CFRelease(hidLeft); hidLeft = NULL;
+    hid_count_forget(hidLeft); CFRelease(hidLeft); hidLeft = NULL;
     CFRelease(hidLeftManager); hidLeftManager = NULL;
 }
 /* HID rumble for a Switch controller unless rumble-hid.txt says off (TOTK_RUMBLE_HID=0 / 1 wins over the file). */
@@ -703,8 +708,9 @@ static BOOL rumble_hid_wanted(void) {
     if (e && *e) return strcmp(e, "0") != 0;
     char word[16] = {0};
     if (!runtime_setting_word("rumble-hid.txt", word, sizeof word)) return YES;
-    word[strcspn(word, " \t\r\n")] = 0;
-    return strcmp(word, "off") != 0;
+    int on = feedback_word_on(word);
+    if (on == FEEDBACK_BAD) fprintf(stderr, "[rumble] rumble-hid.txt: not on or off; on\n");
+    return on != 0;
 }
 static BOOL hid_rumble_start(GCController *c) {   /* main queue, rumbleQueue made */
     const char *name = (c.vendorName ?: @"controller").UTF8String;
@@ -742,8 +748,10 @@ static void hid_rumble_stop(void) {   /* main queue */
         rumbleHidJoyCon = NO;
     });
     hid_close_unused();
-    if (hidLeft)   /* closed once the neutral report above has been written, as hid_close_unused does */
-        dispatch_async(rumbleQueue ?: hidOut, ^{ dispatch_async(hidOut, ^{ dispatch_async(dispatch_get_main_queue(), ^{ hid_left_close_now(); }); }); });
+    if (hidLeft) {   /* closed once the neutral report above has been written, as hid_close_unused does */
+        dispatch_queue_t out = hid_out_queue();
+        dispatch_async(rumbleQueue ?: out, ^{ dispatch_async(out, ^{ dispatch_async(dispatch_get_main_queue(), ^{ hid_left_close_now(); }); }); });
+    }
 }
 #else
 static void hid_motion_start(void) {
