@@ -56,6 +56,9 @@ class SettingsPanel(unittest.TestCase):
                 settings.mkdir()
                 env = {k: v for k, v in os.environ.items() if k not in ('TOTK_MFX', 'TOTK_TAA', 'TOTK_ASPECT', 'TOTK_OUTPUT_RES')}
                 env.update(TOTK_UI_LANG='en', SETTINGS_TEST_DIR=str(settings))
+                run = subprocess.run([str(executable), 'update'], env=env, capture_output=True, text=True, timeout=35)
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                self.assertIn('pass: update page', run.stdout)
                 for action in ('save', 'restore', 'override'):
                     current = dict(env)
                     if action == 'override':
