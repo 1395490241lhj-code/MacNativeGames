@@ -499,6 +499,13 @@ static void hid_subcommand(uint8_t cmd, const uint8_t *arg, int n) {   /* main q
     memcpy(body + 9, arg, n);
     hid_write(hidDevice, 0x01, body, 9 + n);
 }
+static void hid_quiet_at_exit(void);
+/* hid_open and hid_close_unused both need the queue, and hid_imu_start opens its device without hid_open. */
+static dispatch_queue_t hid_out_queue(void) {   /* any queue */
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ hidOut = dispatch_queue_create("totk.hid-out", DISPATCH_QUEUE_SERIAL); atexit(hid_quiet_at_exit); });
+    return hidOut;
+}
 static void hid_quiet_at_exit(void) {   /* the controller keeps the last rumble it got: leave it neutral */
     if (!hidDevice || !hidRumble) return;
     uint8_t out[49] = {0x10, 0, 0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40};
@@ -568,8 +575,7 @@ static void hid_report(void *ctx, IOReturn result, void *sender, IOHIDReportType
 /* product: 0x2009 a Switch Pro Controller (motion or rumble), 0x2007 the right Joy-Con of a paired set (motion, PR #889) */
 static IOReturn hid_open(int product) {   /* main queue */
     if (hidDevice) return kIOReturnSuccess;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ hidOut = dispatch_queue_create("totk.hid-out", DISPATCH_QUEUE_SERIAL); atexit(hid_quiet_at_exit); });
+    hid_out_queue();
     hidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     IOHIDManagerSetDeviceMatching(hidManager, (__bridge CFDictionaryRef)@{@kIOHIDVendorIDKey: @0x057e, @kIOHIDProductIDKey: @(product)});
     NSSet *devices = (__bridge_transfer NSSet *)IOHIDManagerCopyDevices(hidManager);
@@ -594,7 +600,8 @@ static void hid_close_now(void) {   /* main queue */
    goes rumbleQueue, then hidOut, and a device closed before it would keep its last rumble. */
 static void hid_close_unused(void) {   /* main queue */
     if (!hidDevice || hidMotion || hidRumble) return;
-    dispatch_async(rumbleQueue ?: hidOut, ^{ dispatch_async(hidOut, ^{ dispatch_async(dispatch_get_main_queue(), ^{ hid_close_now(); }); }); });
+    dispatch_queue_t out = hid_out_queue();   /* not hidOut: a pad opened by hid_imu_start never made it, and a nil queue crashed here */
+    dispatch_async(rumbleQueue ?: out, ^{ dispatch_async(out, ^{ dispatch_async(dispatch_get_main_queue(), ^{ hid_close_now(); }); }); });
 }
 static void hid_motion_start(void) {   /* main queue */
     if (!motionPad || hidMotion) return;
